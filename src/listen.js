@@ -4,14 +4,17 @@ var utils = require("../utils");
 var log = require("npmlog");
 
 var msgsRecv = 0;
+var identity = function() {};
 
 module.exports = function(defaultFuncs, api, ctx) {
-  var shouldStop = false;
   var currentlyRunning = null;
+  var globalCallback = identity;
+
   var stopListening = function() {
-    shouldStop = true;
+    globalCallback = identity;
     if(currentlyRunning) {
       clearTimeout(currentlyRunning);
+      currentlyRunning = null;
     }
   };
 
@@ -32,18 +35,32 @@ module.exports = function(defaultFuncs, api, ctx) {
     'msgs_recv':msgsRecv
   };
 
-  var globalCallback = null;
+  /**
+   * Get an object maybe representing an event. Handles events it wants to handle
+   * and returns true if it did handle an event (and called the globalCallback).
+   * Returns false otherwise.
+   */
+  function handleMessagingEvents(event) {
+    switch (event.event) {
+      case 'read_receipt':
+        globalCallback(null, utils.formatReadReceipt(event));
+        return true;
+      default:
+        return false;
+    }
+  }
 
   function listen() {
-    if(shouldStop || !ctx.loggedIn) {
+    if(currentlyRunning == null || !ctx.loggedIn) {
       return;
     }
 
     form.idle = ~~(Date.now() / 1000) - prev;
     prev = ~~(Date.now() / 1000);
-
+    var presence = utils.generatePresence(ctx.userID);
+    ctx.jar.setCookie("presence=" + presence + "; path=/; domain=.facebook.com; secure", "https://www.facebook.com");
     utils.get("https://0-edge-chat.facebook.com/pull", ctx.jar, form)
-    .then(utils.parseAndCheckLogin)
+    .then(utils.parseAndCheckLogin(ctx.jar, defaultFuncs))
     .then(function(resData) {
       var now = Date.now();
       log.info("Got answer in ", now - tmpPrev);
@@ -85,13 +102,16 @@ module.exports = function(defaultFuncs, api, ctx) {
           return a.timestamp - b.timestamp;
         }).forEach(function parsePackets(v) {
           switch (v.type) {
+            // TODO: 'ttyp' was used before. It changed to 'typ'. We're keeping
+            // both for now but we should remove 'ttyp' at some point.
             case 'ttyp':
+            case 'typ':
               if(!ctx.globalOptions.listenEvents ||
                 (!ctx.globalOptions.selfListen && v.from.toString() === ctx.userID)) {
                 return;
               }
 
-              globalCallback(null, utils.formatTyp(v));
+              return globalCallback(null, utils.formatTyp(v));
               break;
             case 'buddylist_overlay':
               // TODO: what happens when you're logged in as a page?
@@ -102,8 +122,8 @@ module.exports = function(defaultFuncs, api, ctx) {
               // There should be only one key inside overlay
               Object.keys(v.overlay).map(function(userID) {
                 var formattedPresence = utils.formatPresence(v.overlay[userID], userID);
-                if(!shouldStop && ctx.loggedIn) {
-                  globalCallback(null, formattedPresence);
+                if(ctx.loggedIn) {
+                  return globalCallback(null, formattedPresence);
                 }
               });
               break;
@@ -118,17 +138,23 @@ module.exports = function(defaultFuncs, api, ctx) {
                   return;
                 }
 
-                if (!shouldStop && ctx.loggedIn) {
-                  globalCallback(null, formattedEvent);
+                if (ctx.loggedIn) {
+                  return globalCallback(null, formattedEvent);
                 }
               });
               break;
             case 'messaging':
+              if (ctx.globalOptions.listenEvents && handleMessagingEvents(v)) {
+                // globalCallback got called if handleMessagingEvents returned true
+                return;
+              }
+
               if(ctx.globalOptions.pageID ||
                 v.event !== "deliver" ||
                 (!ctx.globalOptions.selfListen && v.message.sender_fbid.toString() === ctx.userID)) {
                 return;
               }
+
 
               atLeastOne = true;
               var message = utils.formatMessage(v);
@@ -136,40 +162,46 @@ module.exports = function(defaultFuncs, api, ctx) {
               // The participants array is caped at 5, we need to query more to
               // get them.
               if(message.participantIDs.length >= 5) {
-                api.searchForThread(message.threadName, function(err, res) {
-                  if (err) {
-                    globalCallback(err);
-                  }
-
-                  // we take the first thread among all the returned threads
-                  var firstThread = res.filter(function(v) {
-                    return v.threadID === message.threadID;
-                  })[0];
-                  if (!firstThread) {
-                    return globalCallback({error: "Couldn't retrieve thread participants for thread with name " + message.threadName + " and ID " + message.threadID});
-                  }
-
-                  message.participantIDs = firstThread.participants;
-                  api.getUserInfo(firstThread.participants, function(err, firstThread) {
-                    if (err) {
-                      throw err;
+                // We simply make a get request to get the message page focused
+                // on a specific thread and parse the html returned
+                defaultFuncs.get("https://www.facebook.com/messages/search/conversation-" + message.threadID, ctx.jar)
+                  .then(function(res) {
+                    if (res.statusCode !== 200) {
+                      throw {error: "listen: couldn't get participantNames."};
                     }
+                    // FB will send the first 20 thread information directly
+                    // merged inside the html. This is an attempt at retrieving
+                    // that information in only 2 (guaranteed) queries.
+                    // ---------- Very Hacky Part Starts -----------------
+                    // Add "]" at the end for the 2nd utils.getFrom
+                    // because this utils.getFrom will slurp the end token
+                    var almostParticipants = utils.getFrom(res.body, "\"thread_fbid\":\"" + message.threadID + "\",\"other_user_fbid\"", "]") + "]";
+                    var stringParticipants = utils.getFrom(almostParticipants, "[", "]");
+                    var participantIDs = stringParticipants.split(",").map(function(v) {
+                      return v.replace("fbid:", "").replace(/\"/g, "");
+                    });
+                    // ---------- Very Hacky Part Ends -----------------
+                    message.participantIDs = participantIDs;
+                    api.getUserInfo(participantIDs, function(err, firstThread) {
+                      if (err) {
+                        throw err;
+                      }
 
-                    message.participantsInfo = Object.keys(firstThread).map(function(key) {
-                      return firstThread[key];
+                      message.participantsInfo = Object.keys(firstThread).map(function(key) {
+                        return firstThread[key];
+                      });
+                      // Rename this?
+                      message.participantNames = message.participantsInfo.map(function(v) {
+                        return v.name;
+                      });
+                      return globalCallback(null, message);
                     });
-                    // Rename this?
-                    message.participantNames = message.participantsInfo.map(function(v) {
-                      return v.name;
-                    });
-                    globalCallback(null, message);
                   });
-                });
                 return;
               }
 
-              if (!shouldStop && ctx.loggedIn) {
-                globalCallback(null, message);
+              if (ctx.loggedIn) {
+                return globalCallback(null, message);
               }
               break;
             case 'pages_messaging':
@@ -182,8 +214,8 @@ module.exports = function(defaultFuncs, api, ctx) {
               }
 
               atLeastOne = true;
-              if (!shouldStop && ctx.loggedIn) {
-                globalCallback(null, utils.formatMessage(v));
+              if (ctx.loggedIn) {
+                return globalCallback(null, utils.formatMessage(v));
               }
               break;
           }
@@ -212,13 +244,20 @@ module.exports = function(defaultFuncs, api, ctx) {
       if(resData.tr) {
         form.traceid = resData.tr;
       }
-      currentlyRunning = setTimeout(listen, Math.random() * 200 + 50);
-
+      if (currentlyRunning) {
+        currentlyRunning = setTimeout(listen, Math.random() * 200 + 50);
+      }
     })
     .catch(function(err) {
-      log.error("ERROR in listen --> ", err);
-      globalCallback(err);
-      currentlyRunning = setTimeout(listen, Math.random() * 200 + 50);
+      if (err.code === 'ETIMEDOUT') {
+        log.info("Suppressed timeout error.");
+      } else {
+        log.error("ERROR in listen --> ", err);
+        globalCallback(err);
+      }
+      if (currentlyRunning) {
+        currentlyRunning = setTimeout(listen, Math.random() * 200 + 50);
+      }
     });
   }
 

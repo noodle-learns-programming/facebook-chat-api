@@ -2,7 +2,10 @@
 The Official Facebook Chat API uses XMPP and is deprecated as of April 30th 2015. This is a non-official API that doesn't use XMPP.
 As of right now, the only way to automate the chat functionalities is to emulate the browser. This means doing the exact same GET/POST requests and tricking Facebook into thinking we're accessing the website normally. Because we're doing it this way, this API won't work with an auth token but requires the credentials of a Facebook account.
 
-_Side note_: if you want a larger example you should head over to [Marc Zuckerbot](https://github.com/bsansouci/marc-zuckerbot)
+Cool projects using facebook-chat-api: 
+- [Kassy](https://github.com/mrkno/Kassy) - Kassy is a modular, easily extensible general purpose chat bot
+- [Marc Zuckerbot](https://github.com/bsansouci/marc-zuckerbot) - Facebook chat bot
+- [Marc Thuckerbot](https://github.com/bsansouci/lisp-bot) - Programmable lisp bot
 
 ## Install
 ```bash
@@ -29,10 +32,12 @@ login({email: "FB_EMAIL", password: "FB_PASSWORD"}, function callback (err, api)
 * [`api.addUserToGroup`](DOCS.md#addUserToGroup)
 * [`api.changeArchivedStatus`](DOCS.md#changeArchivedStatus)
 * [`api.deleteMessage`](DOCS.md#deleteMessage)
+* [`api.deleteThread`](DOCS.md#deleteThread)
+* [`api.getAppState`](DOCS.md#getAppState)
 * [`api.getCurrentUserID`](DOCS.md#getCurrentUserID)
 * [`api.getFriendsList`](DOCS.md#getFriendsList)
 * [`api.getOnlineUsers`](DOCS.md#getOnlineUsers)
-* [`api.getThreadHistory`](DOCS.md#searchForThread)
+* [`api.getThreadHistory`](DOCS.md#getThreadHistory)
 * [`api.getThreadList`](DOCS.md#getThreadList)
 * [`api.getUserID`](DOCS.md#getUserID)
 * [`api.getUserInfo`](DOCS.md#getUserInfo)
@@ -111,13 +116,13 @@ login({email: "FB_EMAIL", password: "FB_PASSWORD"}, function callback (err, api)
         switch(event.type) {
           case "message":
             if(event.body === '/stop') {
-              api.sendMessage("Goodbye...", event.thread_id);
+              api.sendMessage("Goodbye...", event.threadID);
               return stopListening();
             }
-            api.markAsRead(event.thread_id, function(err) {
+            api.markAsRead(event.threadID, function(err) {
               if(err) console.log(err);
             });
-            api.sendMessage("TEST BOT: " + event.body, event.thread_id);
+            api.sendMessage("TEST BOT: " + event.body, event.threadID);
             break;
           case "event":
             console.log(event);
@@ -130,11 +135,20 @@ login({email: "FB_EMAIL", password: "FB_PASSWORD"}, function callback (err, api)
 ## FAQS
 
 1. How do I run tests?
-
-For tests, create a `test-config.json` file that resembles `example-config.json` and put it in the `test` directory. From the root directory, run `npm test`.
+>For tests, create a `test-config.json` file that resembles `example-config.json` and put it in the `test` directory. From the root >directory, run `npm test`.
 
 2. Why doesn't `sendMessage` always work when I'm logged in as a page?
-Pages can't start conversations with users directly; this is to prevent pages from spamming users.
+>Pages can't start conversations with users directly; this is to prevent pages from spamming users.
 
 3. What do I do when `login` doesn't work?
-First check that you can login to Facebook using the website or app. If login approvals are enabled, you might be logging in incorrectly. For how to handle login approvals, read our docs on [`login`](DOCS.md#login).
+>First check that you can login to Facebook using the website. If login approvals are enabled, you might be logging in >incorrectly. For how to handle login approvals, read our docs on [`login`](DOCS.md#login).
+
+4. How can I avoid logging in every time?  Can I log into a previous session?
+>We support caching everything relevant for you to bypass login. `api.getAppState()` returns an object that you can save and 
+>pass into login as `{appState: mySavedAppState}` instead of the credentials object.  If this fails, your session has expired.
+
+5. Do you support sending messages as a page?
+> Yes, set the pageID option on login (this doesn't work if you set it using api.setOptions, it affects the login process). 
+> ```js
+login(credentials, {pageID: xxxxx}, function(api) { ... }
+```
