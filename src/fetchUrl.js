@@ -10,7 +10,7 @@ module.exports = function(defaultFuncs, api, ctx) {
     }
 
     defaultFuncs
-      .get(url, ctx.jar, opts)
+      .get(url, ctx.jar)    
       .then(utils.saveCookies(ctx.jar))
       .then(function(res) {
         callback(null, res);
