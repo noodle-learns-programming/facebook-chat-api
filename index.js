@@ -78,6 +78,7 @@ function buildAPI(globalOptions, html, jar) {
     'getThreadHistory',
     'getThreadList',
     'getUrl',
+    'fetchUrl',
     'getUserID',
     'getUserInfo',
     'listen',
