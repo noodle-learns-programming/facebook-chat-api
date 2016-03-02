@@ -13,7 +13,7 @@ module.exports = function(defaultFuncs, api, ctx) {
       .get(url, ctx.jar, opts)
       .then(utils.saveCookies(ctx.jar))
       .then(function(res) {
-        callback(null, res.body);
+        callback(null, res);
       })
       .catch(function(err) {
         log.error("Error in fetchUrl", err);
